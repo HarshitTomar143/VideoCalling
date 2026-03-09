@@ -15,7 +15,7 @@ export default function RoomPage() {
 
   useEffect(() => {
 
-    fetch("/api/socket")
+    
 
     async function startCall() {
 
