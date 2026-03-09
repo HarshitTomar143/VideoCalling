@@ -46,6 +46,48 @@ export default function RoomPage() {
         }
       }
 
+      socket.on("user-joined",async()=>{
+        const offer = await peer.createOffer()
+        await peer.setLocalDescription(offer)
+        socket.emit("offer",{
+            roomId,
+            offer
+        })
+      })
+
+      socket.on("offer", async (offer)=>{
+        await peer.setRemoteDescription(offer)
+        const answer = await peer.createAnswer()
+        await peer.setLocalDescription(answer)
+        socket.emit("answer",{
+            roomId,
+            answer
+        })
+      })
+
+      socket.on("answer", async (answer)=>{
+        await peer.setRemoteDescription(answer)
+      })
+
+      peer.onicecandidate = (event)=>{
+        if(event.candidate){
+            socket.emit("ice-candidate",{
+                roomId,
+                candidate: event.candidate
+            })
+        }
+      }
+
+      socket.on("ice-candidate", async (candidate) => {
+        await peer.addIceCandidate(candidate)
+        })
+
+      peer.ontrack = (event) => {
+        if(remoteVideo.current){
+            remoteVideo.current.srcObject = event.streams[0]
+        }
+      }  
+
       socket.emit("join-room", roomId)
 
     }
