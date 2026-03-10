@@ -1,35 +1,56 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import { socket } from "@/lib/socket"
 
 export default function Home() {
 
   const router = useRouter()
+  const [status, setStatus] = useState("")
 
-  const createRoom = () => {
-    const id = Math.random().toString(36).substring(7)
-    router.push(`/room/${id}`)
+  useEffect(() => {
+
+    socket.on("waiting", () => {
+      setStatus("Searching for a partner...")
+    })
+
+    socket.on("matched", (roomId) => {
+      router.push(`/room/${roomId}`)
+    })
+
+  }, [])
+
+  const startChat = () => {
+    socket.emit("find-partner")
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-black via-gray-900 to-gray-800 text-white">
 
-      <div className="text-center space-y-8 p-10 bg-gray-900/70 backdrop-blur-lg rounded-2xl shadow-xl border border-gray-700">
+    <main className="min-h-screen flex items-center justify-center bg-black text-white">
+
+      <div className="text-center space-y-6">
 
         <h1 className="text-4xl font-bold">
-          Start convertation now
+          Random Video Chat
         </h1>
 
-       
         <button
-          onClick={createRoom}
-          className="px-8 py-3 bg-blue-600 hover:bg-blue-700 transition rounded-lg font-semibold shadow-lg"
+          onClick={startChat}
+          className="px-6 py-3 bg-blue-600 rounded-lg hover:bg-blue-700"
         >
-          Find someone
+          Start Chat
         </button>
+
+        {status && (
+          <p className="text-gray-400">
+            {status}
+          </p>
+        )}
 
       </div>
 
     </main>
+
   )
 }

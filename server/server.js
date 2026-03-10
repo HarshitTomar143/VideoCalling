@@ -22,13 +22,44 @@ app.get("/health", (req, res) => {
 })
 
 
+let waitingUser = null
+
 io.on("connection", (socket) => {
 
-  console.log("User connected")
+  console.log("User connected:", socket.id)
 
+  
+
+  socket.on("find-partner", () => {
+
+    console.log("User searching:", socket.id)
+
+    if (waitingUser && waitingUser.id !== socket.id) {
+
+      const roomId = Math.random().toString(36).substring(7)
+
+      console.log("Match found:", waitingUser.id, socket.id)
+
+      socket.join(roomId)
+      waitingUser.join(roomId)
+
+      socket.emit("matched", roomId)
+      waitingUser.emit("matched", roomId)
+
+      waitingUser = null
+
+    } else {
+      waitingUser = socket
+      socket.emit("waiting")
+    }
+  })
   socket.on("join-room", (roomId) => {
+
+    console.log(`User ${socket.id} joined room ${roomId}`)
+
     socket.join(roomId)
     socket.to(roomId).emit("user-joined")
+
   })
 
   socket.on("offer", ({ roomId, offer }) => {
@@ -41,6 +72,17 @@ io.on("connection", (socket) => {
 
   socket.on("ice-candidate", ({ roomId, candidate }) => {
     socket.to(roomId).emit("ice-candidate", candidate)
+  })
+
+
+  socket.on("disconnect", () => {
+
+    console.log("User disconnected:", socket.id)
+
+    if (waitingUser && waitingUser.id === socket.id) {
+      waitingUser = null
+    }
+
   })
 
 })
