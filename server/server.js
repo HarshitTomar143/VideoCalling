@@ -68,12 +68,12 @@ io.on("connection", (socket) => {
   })
 
   socket.on("answer", ({ roomId, answer }) => {
-    console.log("Forwarding offer")
+     console.log("Forwarding answer")
     socket.to(roomId).emit("answer", {answer})
   })
 
   socket.on("ice-candidate", ({ roomId, candidate }) => {
-    console.log("Forwarding offer")
+    console.log("Forwarding ICE")
     socket.to(roomId).emit("ice-candidate", {candidate})
   })
 

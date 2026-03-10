@@ -18,10 +18,14 @@ export default function RoomPage() {
   const peerRef = useRef<RTCPeerConnection | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
-  const makingOffer = useRef(false)
-  const polite = useRef(Math.random() > 0.5)
+  const pendingCandidates = useRef<RTCIceCandidateInit[]>([])
+
+  const initialized = useRef(false)
 
   useEffect(() => {
+
+    if (initialized.current) return
+    initialized.current = true
 
     async function startCall() {
 
@@ -67,17 +71,20 @@ export default function RoomPage() {
 
       /* Remote stream */
 
+      const remoteStream = new MediaStream()
+
+
       peer.ontrack = (event) => {
 
-        console.log("Remote stream received")
+  console.log("Remote track received")
 
-        const [remoteStream] = event.streams
+  remoteStream.addTrack(event.track)
 
-        if (remoteVideo.current) {
-          remoteVideo.current.srcObject = remoteStream
-        }
+  if (remoteVideo.current) {
+    remoteVideo.current.srcObject = remoteStream
+  }
 
-      }
+}
 
       /* ICE candidates */
 
@@ -96,38 +103,26 @@ export default function RoomPage() {
 
       }
 
-      /* Negotiation needed */
+      socket.on("user-joined", async () => {
 
-      peer.onnegotiationneeded = async () => {
 
-        try {
+  if (!peerRef.current) return
+  if (peerRef.current.signalingState === "closed") return
 
-          console.log("Negotiation needed")
+      console.log("User joined, creating offer")
 
-          makingOffer.current = true
+      const offer = await peer.createOffer()
 
-          const offer = await peer.createOffer()
+      await peer.setLocalDescription(offer)
 
-          await peer.setLocalDescription(offer)
+      socket.emit("offer", {
+        roomId,
+        offer
+      })
 
-          console.log("Sending offer")
+    })
 
-          socket.emit("offer", {
-            roomId,
-            offer: peer.localDescription
-          })
-
-        } catch (err) {
-
-          console.error("Negotiation error:", err)
-
-        } finally {
-
-          makingOffer.current = false
-
-        }
-
-      }
+     
 
       /* Receive offer */
 
@@ -135,18 +130,15 @@ export default function RoomPage() {
 
         console.log("Offer received")
 
-        const offerCollision =
-          makingOffer.current || peer.signalingState !== "stable"
+        if (!peerRef.current) return
+  if (peerRef.current.signalingState === "closed") return
 
-        const ignoreOffer = !polite.current && offerCollision
-
-        if (ignoreOffer) {
-          console.log("Ignoring offer collision")
-          return
-        }
 
         await peer.setRemoteDescription(new RTCSessionDescription(offer))
-
+        for (const c of pendingCandidates.current) {
+            await peer.addIceCandidate(new RTCIceCandidate(c))
+          }
+          pendingCandidates.current = []
         console.log("Creating answer")
 
         const answer = await peer.createAnswer()
@@ -164,11 +156,23 @@ export default function RoomPage() {
 
       socket.on("answer", async ({ answer }) => {
 
+        if (!peerRef.current) return
+  if (peerRef.current.signalingState === "closed") return
+
         console.log("Answer received")
+
+        if (peer.signalingState !== "have-local-offer") {
+          console.log("Ignoring duplicate answer")
+          return
+  }
 
         await peer.setRemoteDescription(
           new RTCSessionDescription(answer)
         )
+        for (const c of pendingCandidates.current) {
+            await peer.addIceCandidate(new RTCIceCandidate(c))
+          }
+          pendingCandidates.current = []
 
       })
 
@@ -176,20 +180,31 @@ export default function RoomPage() {
 
       socket.on("ice-candidate", async ({ candidate }) => {
 
-        try {
-
           console.log("ICE candidate received")
 
-          await peer.addIceCandidate(candidate)
+          if (!candidate) return
 
-        } catch (err) {
+          try {
 
-          console.error("ICE candidate error:", err)
+            if (peer.remoteDescription) {
 
-        }
+              await peer.addIceCandidate(new RTCIceCandidate(candidate))
 
-      })
+            } else {
 
+              console.log("Queueing ICE candidate")
+
+              pendingCandidates.current.push(candidate)
+
+            }
+
+          } catch (err) {
+
+            console.error("ICE candidate error:", err)
+
+          }
+
+        })
       /* Join room */
 
       console.log("Joining room:", roomId)
@@ -248,15 +263,16 @@ export default function RoomPage() {
 
   const leaveCall = () => {
 
-    console.log("Leaving call")
+  console.log("Leaving call")
 
-    peerRef.current?.close()
+  peerRef.current?.close()
+  peerRef.current = null
 
-    streamRef.current?.getTracks().forEach(track => track.stop())
+  streamRef.current?.getTracks().forEach(track => track.stop())
 
-    router.push("/")
+  router.push("/")
 
-  }
+}
 
   return (
 
