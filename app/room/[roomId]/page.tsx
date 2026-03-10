@@ -18,8 +18,9 @@ export default function RoomPage() {
   const peerRef = useRef<RTCPeerConnection | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
-  const pendingCandidates = useRef<RTCIceCandidateInit[]>([])
+  const remoteStreamRef = useRef<MediaStream>(new MediaStream())
 
+  const pendingCandidates = useRef<RTCIceCandidateInit[]>([])
   const initialized = useRef(false)
 
   useEffect(() => {
@@ -31,14 +32,14 @@ export default function RoomPage() {
 
       console.log("Starting call")
 
-      /* Reset previous peer */
+      /* cleanup previous */
 
       peerRef.current?.close()
       peerRef.current = null
 
       streamRef.current?.getTracks().forEach(track => track.stop())
 
-      /* Get camera */
+      /* get media */
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -51,42 +52,39 @@ export default function RoomPage() {
         localVideo.current.srcObject = stream
       }
 
-      /* Create peer */
+      /* create peer */
 
       const peer = new RTCPeerConnection({
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" }
-        ]
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
       })
 
       peerRef.current = peer
 
       console.log("Peer created")
 
-      /* Add local tracks */
+      /* add tracks */
 
       stream.getTracks().forEach(track => {
         peer.addTrack(track, stream)
       })
 
-      /* Remote stream */
-
-      const remoteStream = new MediaStream()
-
+      /* remote stream */
 
       peer.ontrack = (event) => {
 
-  console.log("Remote track received")
+        console.log("Remote track received")
 
-  remoteStream.addTrack(event.track)
+        const remoteStream = remoteStreamRef.current
 
-  if (remoteVideo.current) {
-    remoteVideo.current.srcObject = remoteStream
-  }
+        remoteStream.addTrack(event.track)
 
-}
+        if (remoteVideo.current && remoteVideo.current.srcObject !== remoteStream) {
+          remoteVideo.current.srcObject = remoteStream
+        }
 
-      /* ICE candidates */
+      }
+
+      /* ICE */
 
       peer.onicecandidate = ({ candidate }) => {
 
@@ -103,42 +101,45 @@ export default function RoomPage() {
 
       }
 
+      /* user joined */
+
       socket.on("user-joined", async () => {
 
+        if (!peerRef.current) return
+        if (peerRef.current.signalingState === "closed") return
 
-  if (!peerRef.current) return
-  if (peerRef.current.signalingState === "closed") return
+        console.log("User joined, creating offer")
 
-      console.log("User joined, creating offer")
+        const offer = await peer.createOffer()
 
-      const offer = await peer.createOffer()
+        await peer.setLocalDescription(offer)
 
-      await peer.setLocalDescription(offer)
+        socket.emit("offer", {
+          roomId,
+          offer
+        })
 
-      socket.emit("offer", {
-        roomId,
-        offer
       })
 
-    })
-
-     
-
-      /* Receive offer */
+      /* offer */
 
       socket.on("offer", async ({ offer }) => {
 
         console.log("Offer received")
 
         if (!peerRef.current) return
-  if (peerRef.current.signalingState === "closed") return
-
+        if (peerRef.current.signalingState === "closed") return
 
         await peer.setRemoteDescription(new RTCSessionDescription(offer))
+
+        /* apply queued ICE */
+
         for (const c of pendingCandidates.current) {
-            await peer.addIceCandidate(new RTCIceCandidate(c))
-          }
-          pendingCandidates.current = []
+          await peer.addIceCandidate(new RTCIceCandidate(c))
+        }
+
+        pendingCandidates.current = []
+
         console.log("Creating answer")
 
         const answer = await peer.createAnswer()
@@ -152,60 +153,55 @@ export default function RoomPage() {
 
       })
 
-      /* Receive answer */
+      /* answer */
 
       socket.on("answer", async ({ answer }) => {
 
         if (!peerRef.current) return
-  if (peerRef.current.signalingState === "closed") return
-
-        console.log("Answer received")
-
-        if (peer.signalingState !== "have-local-offer") {
+        if (peerRef.current.signalingState !== "have-local-offer") {
           console.log("Ignoring duplicate answer")
           return
-  }
+        }
+
+        console.log("Answer received")
 
         await peer.setRemoteDescription(
           new RTCSessionDescription(answer)
         )
-        for (const c of pendingCandidates.current) {
-            await peer.addIceCandidate(new RTCIceCandidate(c))
-          }
-          pendingCandidates.current = []
 
       })
 
-      /* Receive ICE */
+      /* ICE received */
 
       socket.on("ice-candidate", async ({ candidate }) => {
 
-          console.log("ICE candidate received")
+        console.log("ICE candidate received")
 
-          if (!candidate) return
+        if (!candidate) return
 
-          try {
+        try {
 
-            if (peer.remoteDescription) {
+          if (peer.remoteDescription) {
 
-              await peer.addIceCandidate(new RTCIceCandidate(candidate))
+            await peer.addIceCandidate(new RTCIceCandidate(candidate))
 
-            } else {
+          } else {
 
-              console.log("Queueing ICE candidate")
+            console.log("Queueing ICE candidate")
 
-              pendingCandidates.current.push(candidate)
-
-            }
-
-          } catch (err) {
-
-            console.error("ICE candidate error:", err)
+            pendingCandidates.current.push(candidate)
 
           }
 
-        })
-      /* Join room */
+        } catch (err) {
+
+          console.error("ICE candidate error:", err)
+
+        }
+
+      })
+
+      /* join room */
 
       console.log("Joining room:", roomId)
 
@@ -219,6 +215,7 @@ export default function RoomPage() {
 
       console.log("Cleaning up listeners")
 
+      socket.off("user-joined")
       socket.off("offer")
       socket.off("answer")
       socket.off("ice-candidate")
@@ -227,7 +224,7 @@ export default function RoomPage() {
 
   }, [])
 
-  /* Toggle Camera */
+  /* toggle camera */
 
   const toggleCamera = () => {
 
@@ -243,7 +240,7 @@ export default function RoomPage() {
 
   }
 
-  /* Toggle Mic */
+  /* toggle mic */
 
   const toggleMic = () => {
 
@@ -259,20 +256,20 @@ export default function RoomPage() {
 
   }
 
-  /* Leave call */
+  /* leave call */
 
   const leaveCall = () => {
 
-  console.log("Leaving call")
+    console.log("Leaving call")
 
-  peerRef.current?.close()
-  peerRef.current = null
+    peerRef.current?.close()
+    peerRef.current = null
 
-  streamRef.current?.getTracks().forEach(track => track.stop())
+    streamRef.current?.getTracks().forEach(track => track.stop())
 
-  router.push("/")
+    router.push("/")
 
-}
+  }
 
   return (
 
@@ -287,7 +284,7 @@ export default function RoomPage() {
         className="w-full h-full object-cover"
       />
 
-      {/* Local preview */}
+      {/* Local video */}
 
       <video
         ref={localVideo}
