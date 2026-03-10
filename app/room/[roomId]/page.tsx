@@ -1,7 +1,7 @@
 "use client"
 
 import { useParams, useRouter } from "next/navigation"
-import { useEffect, useRef, useState} from "react"
+import { useEffect, useRef, useState } from "react"
 import { socket } from "@/lib/socket"
 
 export default function RoomPage() {
@@ -9,8 +9,8 @@ export default function RoomPage() {
   const { roomId } = useParams()
   const router = useRouter()
 
-  const[ cameraOn, setCameraOn] = useState(true)
-  const[micOn, setMicOn] = useState(true) 
+  const [cameraOn, setCameraOn] = useState(true)
+  const [micOn, setMicOn] = useState(true)
 
   const localVideo = useRef<HTMLVideoElement>(null)
   const remoteVideo = useRef<HTMLVideoElement>(null)
@@ -18,9 +18,23 @@ export default function RoomPage() {
   const peerRef = useRef<RTCPeerConnection | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
+  const makingOffer = useRef(false)
+  const polite = useRef(Math.random() > 0.5)
+
   useEffect(() => {
 
     async function startCall() {
+
+      console.log("Starting call")
+
+      /* Reset previous peer */
+
+      peerRef.current?.close()
+      peerRef.current = null
+
+      streamRef.current?.getTracks().forEach(track => track.stop())
+
+      /* Get camera */
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -33,6 +47,8 @@ export default function RoomPage() {
         localVideo.current.srcObject = stream
       }
 
+      /* Create peer */
+
       const peer = new RTCPeerConnection({
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" }
@@ -41,29 +57,97 @@ export default function RoomPage() {
 
       peerRef.current = peer
 
+      console.log("Peer created")
+
+      /* Add local tracks */
+
       stream.getTracks().forEach(track => {
         peer.addTrack(track, stream)
       })
 
+      /* Remote stream */
+
       peer.ontrack = (event) => {
+
+        console.log("Remote stream received")
+
+        const [remoteStream] = event.streams
+
         if (remoteVideo.current) {
-          remoteVideo.current.srcObject = event.streams[0]
+          remoteVideo.current.srcObject = remoteStream
         }
+
       }
 
-      socket.on("user-joined", async () => {
-        const offer = await peer.createOffer()
-        await peer.setLocalDescription(offer)
+      /* ICE candidates */
 
-        socket.emit("offer", {
-          roomId,
-          offer
-        })
-      })
+      peer.onicecandidate = ({ candidate }) => {
 
-      socket.on("offer", async (offer) => {
+        if (candidate) {
 
-        await peer.setRemoteDescription(offer)
+          console.log("Sending ICE candidate")
+
+          socket.emit("ice-candidate", {
+            roomId,
+            candidate
+          })
+
+        }
+
+      }
+
+      /* Negotiation needed */
+
+      peer.onnegotiationneeded = async () => {
+
+        try {
+
+          console.log("Negotiation needed")
+
+          makingOffer.current = true
+
+          const offer = await peer.createOffer()
+
+          await peer.setLocalDescription(offer)
+
+          console.log("Sending offer")
+
+          socket.emit("offer", {
+            roomId,
+            offer: peer.localDescription
+          })
+
+        } catch (err) {
+
+          console.error("Negotiation error:", err)
+
+        } finally {
+
+          makingOffer.current = false
+
+        }
+
+      }
+
+      /* Receive offer */
+
+      socket.on("offer", async ({ offer }) => {
+
+        console.log("Offer received")
+
+        const offerCollision =
+          makingOffer.current || peer.signalingState !== "stable"
+
+        const ignoreOffer = !polite.current && offerCollision
+
+        if (ignoreOffer) {
+          console.log("Ignoring offer collision")
+          return
+        }
+
+        await peer.setRemoteDescription(new RTCSessionDescription(offer))
+
+        console.log("Creating answer")
 
         const answer = await peer.createAnswer()
 
@@ -71,31 +155,44 @@ export default function RoomPage() {
 
         socket.emit("answer", {
           roomId,
-          answer
+          answer: peer.localDescription
         })
 
       })
 
-      socket.on("answer", async (answer) => {
-        await peer.setRemoteDescription(answer)
+      /* Receive answer */
+
+      socket.on("answer", async ({ answer }) => {
+
+        console.log("Answer received")
+
+        await peer.setRemoteDescription(
+          new RTCSessionDescription(answer)
+        )
+
       })
 
-      peer.onicecandidate = (event) => {
+      /* Receive ICE */
 
-        if (event.candidate) {
+      socket.on("ice-candidate", async ({ candidate }) => {
 
-          socket.emit("ice-candidate", {
-            roomId,
-            candidate: event.candidate
-          })
+        try {
+
+          console.log("ICE candidate received")
+
+          await peer.addIceCandidate(candidate)
+
+        } catch (err) {
+
+          console.error("ICE candidate error:", err)
 
         }
 
-      }
-
-      socket.on("ice-candidate", async (candidate) => {
-        await peer.addIceCandidate(candidate)
       })
+
+      /* Join room */
+
+      console.log("Joining room:", roomId)
 
       socket.emit("join-room", roomId)
 
@@ -103,37 +200,55 @@ export default function RoomPage() {
 
     startCall()
 
+    return () => {
+
+      console.log("Cleaning up listeners")
+
+      socket.off("offer")
+      socket.off("answer")
+      socket.off("ice-candidate")
+
+    }
+
   }, [])
 
-  const toggleCamera = ()=>{
-    const stream = streamRef.current
-    if (!stream){
-      console.log("No chat is done")
-    }
-    const videoTrack = stream?.getVideoTracks()[0]
+  /* Toggle Camera */
 
-    if(videoTrack){
-      videoTrack.enabled = !videoTrack.enabled
-      setCameraOn(videoTrack.enabled)
+  const toggleCamera = () => {
+
+    const stream = streamRef.current
+    if (!stream) return
+
+    const track = stream.getVideoTracks()[0]
+
+    if (track) {
+      track.enabled = !track.enabled
+      setCameraOn(track.enabled)
     }
+
   }
+
+  /* Toggle Mic */
 
   const toggleMic = () => {
+
     const stream = streamRef.current
+    if (!stream) return
 
-    if(!stream){
-      return
+    const track = stream.getAudioTracks()[0]
+
+    if (track) {
+      track.enabled = !track.enabled
+      setMicOn(track.enabled)
     }
 
-    const audioTrack = stream.getAudioTracks()[0]
-
-    if(audioTrack){
-      audioTrack.enabled = !audioTrack.enabled
-      setMicOn(audioTrack.enabled)
-    }
   }
 
+  /* Leave call */
+
   const leaveCall = () => {
+
+    console.log("Leaving call")
 
     peerRef.current?.close()
 
@@ -147,7 +262,8 @@ export default function RoomPage() {
 
     <div className="h-screen w-screen bg-black relative">
 
-      {/* Remote Video (fullscreen) */}
+      {/* Remote video */}
+
       <video
         ref={remoteVideo}
         autoPlay
@@ -155,7 +271,8 @@ export default function RoomPage() {
         className="w-full h-full object-cover"
       />
 
-      {/* Local Video */}
+      {/* Local preview */}
+
       <video
         ref={localVideo}
         autoPlay
@@ -165,6 +282,7 @@ export default function RoomPage() {
       />
 
       {/* Controls */}
+
       <div className="absolute bottom-6 w-full flex justify-center gap-6">
 
         <button
@@ -193,4 +311,5 @@ export default function RoomPage() {
     </div>
 
   )
+
 }

@@ -11,15 +11,17 @@ export default function Home() {
 
   useEffect(() => {
 
-    socket.on("waiting", () => {
-      setStatus("Searching for a partner...")
-    })
+  socket.on("waiting", () => {
+    setStatus("Searching for a partner...")
+  })
 
-    socket.on("matched", (roomId) => {
-      router.push(`/room/${roomId}`)
-    })
+  socket.on("matched", (roomId) => {
+    router.push(`/room/${roomId}`)
+  })
 
-  }, [])
+  
+
+}, [])
 
   const startChat = () => {
     socket.emit("find-partner")
