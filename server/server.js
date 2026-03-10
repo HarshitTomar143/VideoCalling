@@ -17,7 +17,7 @@ const io = new Server(server, {
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "ok",
-    message: "Server is running"
+    message: "Server is running fineee"
   })
 })
 
